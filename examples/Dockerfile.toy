@@ -1,0 +1,14 @@
+# Sandbox image for the toy demo: python + git + pytest, repo at /testbed.
+#   docker build -f examples/Dockerfile.toy -t fixpoint-toy examples/
+FROM python:3.12-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir pytest
+COPY toy_repo /testbed
+WORKDIR /testbed
+RUN git init -q \
+    && git config user.email demo@example.com \
+    && git config user.name demo \
+    && git add -A \
+    && git commit -qm "toy repo base"

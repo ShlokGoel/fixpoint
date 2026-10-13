@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trajectory Viewer</title>
+<style>
+  :root {
+    --bg: #fafaf9; --panel: #ffffff; --text: #1c1917; --muted: #78716c; --line: #e7e5e4;
+    --accent: #2563eb; --sel: #eff6ff; --err: #b91c1c; --errbg: #fef2f2; --add: #166534; --addbg: #f0fdf4;
+    --del: #991b1b; --delbg: #fef2f2; --code: #f5f5f4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0c0a09; --panel: #1c1917; --text: #e7e5e4; --muted: #a8a29e; --line: #292524;
+      --accent: #60a5fa; --sel: #172554; --err: #f87171; --errbg: #2a1212; --add: #86efac; --addbg: #0f2417;
+      --del: #fca5a5; --delbg: #2a1212; --code: #0c0a09;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 system-ui, -apple-system, Segoe UI, sans-serif; background: var(--bg); color: var(--text); }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 16px; margin: 0 8px 0 0; }
+  #summary { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--muted); font-size: 13px; }
+  #summary b { color: var(--text); font-weight: 600; }
+  main { display: grid; grid-template-columns: minmax(220px, 320px) 1fr; height: calc(100vh - 58px); }
+  #list { overflow-y: auto; border-right: 1px solid var(--line); background: var(--panel); }
+  .item { padding: 7px 12px; border-bottom: 1px solid var(--line); cursor: pointer; display: flex; gap: 8px; align-items: baseline; }
+  .item:hover { background: var(--sel); }
+  .item.active { background: var(--sel); box-shadow: inset 3px 0 0 var(--accent); }
+  .item .seq { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 2.5em; }
+  .item .err { color: var(--err); font-weight: 600; }
+  #detail { overflow-y: auto; padding: 16px 20px; }
+  h2 { font-size: 15px; margin: 0 0 4px; }
+  .meta { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+  .block { margin: 10px 0; }
+  .label { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-bottom: 4px; }
+  pre { margin: 0; padding: 10px 12px; background: var(--code); border: 1px solid var(--line); border-radius: 6px; white-space: pre-wrap; word-break: break-word; font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; max-height: 70vh; overflow: auto; }
+  pre.error { background: var(--errbg); border-color: var(--err); }
+  .add { color: var(--add); background: var(--addbg); display: block; }
+  .del { color: var(--del); background: var(--delbg); display: block; }
+  .empty { color: var(--muted); padding: 40px 0; text-align: center; }
+  button, label.btn { font: inherit; padding: 5px 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 6px; cursor: pointer; }
+  input[type=file] { display: none; }
+  @media (max-width: 700px) { main { grid-template-columns: 1fr; height: auto; } #list { max-height: 40vh; border-right: 0; border-bottom: 1px solid var(--line); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Trajectory viewer</h1>
+  <label class="btn">Load .jsonl<input id="file" type="file" accept=".jsonl,.json,.txt"></label>
+  <button id="prev" title="Previous (k / ←)">◀</button>
+  <button id="next" title="Next (j / →)">▶</button>
+  <button id="patchBtn">Final patch</button>
+  <div id="summary"></div>
+</header>
+<main>
+  <nav id="list"></nav>
+  <section id="detail"><div class="empty">Load a trajectory file from runs/&lt;run&gt;/trajectories/, or drop one anywhere on the page.</div></section>
+</main>
+<script>
+(() => {
+  let events = [], idx = -1;
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+  const fmt = (v) => typeof v === "string" ? v : JSON.stringify(v, null, 2);
+
+  function label(e) {
+    const p = e.payload || {};
+    if (e.type === "tool_call") return `${p.name}${p.meta && p.meta.gated ? " (rejected)" : ""}`;
+    if (e.type === "model_response") {
+      const calls = (p.content || []).filter(b => b.type === "tool_use").length;
+      return `model · step ${p.step}${calls ? ` · ${calls} call${calls > 1 ? "s" : ""}` : ""}`;
+    }
+    return e.type.replace(/_/g, " ");
+  }
+
+  function load(text) {
+    events = text.split("\n").filter(l => l.trim()).map(l => JSON.parse(l));
+    const start = (events.find(e => e.type === "episode_start") || {}).payload || {};
+    const end = (events.slice().reverse().find(e => e.type === "episode_end") || {}).payload || {};
+    const s = $("summary"); s.replaceChildren();
+    const add = (k, v) => { if (v == null || v === "") return; const span = el("span"); span.append(k + " "); span.append(el("b", null, String(v))); s.append(span); };
+    add("instance", start.instance_id); add("model", start.model);
+    if (end.models_served && end.models_served.length) add("served", end.models_served.join(", "));
+    add("stop", end.stop_cause);
+    add("steps", end.steps); add("cost", end.cost_usd != null ? "$" + Number(end.cost_usd).toFixed(4) : null);
+    add("patch lines", end.patch_lines); add("resets", end.context_resets || null); add("config", start.config_fingerprint);
+    const list = $("list"); list.replaceChildren();
+    events.forEach((e, i) => {
+      const item = el("div", "item"); item.dataset.i = i;
+      item.append(el("span", "seq", String(e.seq)), el("span", null, label(e)));
+      if (e.payload && e.payload.is_error) item.append(el("span", "err", "error"));
+      item.onclick = () => show(i);
+      list.append(item);
+    });
+    show(0);
+  }
+
+  function section(title, body, cls) {
+    const b = el("div", "block"); b.append(el("div", "label", title));
+    const pre = el("pre", cls || null, body); b.append(pre); return b;
+  }
+
+  function diffBlock(patch) {
+    const pre = el("pre");
+    if (!patch) { pre.textContent = "(empty patch)"; return pre; }
+    patch.split("\n").forEach(line => {
+      const cls = line.startsWith("+") && !line.startsWith("+++") ? "add" : line.startsWith("-") && !line.startsWith("---") ? "del" : null;
+      const span = el("span", cls, line + "\n"); pre.append(span);
+    });
+    return pre;
+  }
+
+  function show(i) {
+    if (!events.length) return;
+    idx = Math.max(0, Math.min(events.length - 1, i));
+    document.querySelectorAll(".item").forEach(n => n.classList.toggle("active", Number(n.dataset.i) === idx));
+    const active = document.querySelector(".item.active"); if (active) active.scrollIntoView({ block: "nearest" });
+    const e = events[idx], p = e.payload || {}, d = $("detail");
+    d.replaceChildren(el("h2", null, label(e)), el("div", "meta", `#${e.seq} · ${e.type} · ${e.ts}`));
+    if (e.type === "model_response") {
+      (p.content || []).forEach(b => {
+        if (b.type === "text") d.append(section("assistant text", b.text));
+        else if (b.type === "thinking") d.append(section("thinking", b.thinking || "(thinking not displayed; set thinking_display: summarized)"));
+        else if (b.type === "redacted_thinking") d.append(section("thinking", "(redacted)"));
+        else if (b.type === "tool_use") d.append(section(`tool call → ${b.name}`, fmt(b.input)));
+        else d.append(section(b.type, fmt(b)));
+      });
+      d.append(section("usage", `${fmt(p.usage)}\ncall cost $${p.cost_usd} · cumulative $${p.cumulative_cost_usd} · ${p.latency_s}s · ${p.model}`));
+    } else if (e.type === "tool_call") {
+      d.append(section("input", fmt(p.input)));
+      d.append(section(p.is_error ? "output (error)" : "output", p.output, p.is_error ? "error" : null));
+      if (p.meta) d.append(section("meta", fmt(p.meta)));
+    } else if (e.type === "episode_end") {
+      const b = el("div", "block"); b.append(el("div", "label", "final patch"), diffBlock(p.patch)); d.append(b);
+      const rest = Object.assign({}, p); delete rest.patch; d.append(section("details", fmt(rest)));
+    } else if (e.type === "episode_start") {
+      d.append(section("task prompt", p.task_prompt || ""));
+      d.append(section("system prompt", p.system_prompt || ""));
+      const rest = Object.assign({}, p); delete rest.task_prompt; delete rest.system_prompt;
+      d.append(section("config", fmt(rest)));
+    } else {
+      d.append(section("payload", fmt(p)));
+    }
+  }
+
+  $("file").onchange = (ev) => { const f = ev.target.files[0]; if (f) f.text().then(load).catch(err => alert("Could not read file: " + err)); };
+  $("prev").onclick = () => show(idx - 1);
+  $("next").onclick = () => show(idx + 1);
+  $("patchBtn").onclick = () => { const i = events.findIndex(e => e.type === "episode_end"); if (i >= 0) show(i); };
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "ArrowRight" || ev.key === "j") show(idx + 1);
+    if (ev.key === "ArrowLeft" || ev.key === "k") show(idx - 1);
+  });
+  document.addEventListener("dragover", (ev) => ev.preventDefault());
+  document.addEventListener("drop", (ev) => { ev.preventDefault(); const f = ev.dataTransfer.files[0]; if (f) f.text().then(load); });
+})();
+</script>
+</body>
+</html>

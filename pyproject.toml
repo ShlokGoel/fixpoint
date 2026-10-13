@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fixpoint"
+version = "0.1.0"
+description = "A coding agent built on the raw Anthropic Messages API, evaluated on SWE-bench Lite with failure analysis and reward-hacking detection."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Shlok Goel" }]
+requires-python = ">=3.10"
+dependencies = [
+  "anthropic>=0.40",
+  "pyyaml>=6",
+]
+
+[project.optional-dependencies]
+eval = ["swebench>=4", "datasets>=2.18"]
+dev = ["pytest>=8", "ruff>=0.5"]
+
+[tool.setuptools.packages.find]
+include = ["agent*", "harness*", "analysis*"]
+
+[tool.setuptools.package-data]
+agent = ["prompts/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = ["examples/toy_repo"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501", "B008"]

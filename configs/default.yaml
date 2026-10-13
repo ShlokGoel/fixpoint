@@ -1,0 +1,45 @@
+# Default experiment configuration. Every value here is logged into each trajectory
+# and hashed into the run fingerprint (see agent/config.py).
+
+model: claude-sonnet-5-5        # pinned; the exact model string the API serves is also logged per call
+max_tokens_per_turn: 16000      # covers thinking + visible output
+# Current models reject non-default temperature/top_p/top_k, so behaviour is pinned with these:
+thinking: adaptive              # adaptive | between_tools | "" (omit, for older models)
+thinking_display: summarized    # keep readable reasoning in trajectories
+effort: high                    # low | medium | high | xhigh | max
+seed: 0                         # seeds task-subset sampling (API sampling itself is not seedable)
+
+# Per-task caps: the first one hit ends the episode.
+max_steps: 60
+max_cost_usd: 3.00
+max_wallclock_s: 1800
+
+# Context management: past this many prompt tokens the conversation is reset with a
+# state summary (history stays append-only; see agent/context.py).
+context_budget_tokens: 150000
+max_context_resets: 3
+tool_output_max_chars: 12000
+
+# Stuck detection
+max_consecutive_errors: 5
+max_repeated_calls: 3
+
+# USD per million tokens. Check https://platform.claude.com/docs before every run;
+# prices change and cost numbers are only as good as these values.
+pricing:
+  input: 2.00
+  output: 10.00
+  cache_write: 2.50             # 1.25x input (5-minute cache)
+  cache_read: 0.10              # Sonnet 5.5 reads at 0.05x input (most models: 0.1x)
+
+scaffold:
+  planning: true
+  localization: true            # ablate with --set scaffold.localization=false
+  self_verification: true       # ablate with --set scaffold.self_verification=false
+
+sandbox:
+  workdir: /testbed
+  network: none
+  command_timeout_s: 180
+  memory: 4g
+  cpus: "2"
